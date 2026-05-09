@@ -1,0 +1,39 @@
+==================================================
+Train ID: tp-242157, Number: 1921, Category: cat-1
+OCPs:
+  - OCP Ref: ocp-454, Type: stop, Arrival: N/A, Departure: 16:08:00,
+  - OCP Ref: ocp-646, Type: stop, Arrival: 16:16:00, Departure: N/A,
+Station Codes: KRÅ, TOM, SPG, ASM, MYS
+Abbreviation to OCP Ref Mapping:
+KRÅ: ocp-175
+TOM: ocp-454
+SPG: ocp-646
+ASM: ocp-2
+MYS: ocp-265
+==================================================
+Train ID: tp-242165, Number: 1923, Category: cat-1
+OCPs:
+  - OCP Ref: ocp-454, Type: stop, Arrival: 17:07:30, Departure: 17:08:00,
+  - OCP Ref: ocp-646, Type: stop, Arrival: 17:16:00, Departure: 17:17:00,
+Station Codes: KRÅ, TOM, SPG, ASM, MYS, RST
+Abbreviation to OCP Ref Mapping:
+KRÅ: ocp-175
+TOM: ocp-454
+SPG: ocp-646
+ASM: ocp-2
+MYS: ocp-265
+RST: ocp-586
+==================================================
+Train ID: tp-242190, Number: 1928, Category: cat-1
+OCPs:
+  - OCP Ref: ocp-646, Type: stop, Arrival: 17:13:00, Departure: 17:16:00,
+  - OCP Ref: ocp-454, Type: stop, Arrival: 17:23:30, Departure: 17:24:00,
+Station Codes: MYS, ASM, SPG, TOM, KRÅ
+Abbreviation to OCP Ref Mapping:
+MYS: ocp-265
+ASM: ocp-2
+SPG: ocp-646
+TOM: ocp-454
+KRÅ: ocp-175
+
+

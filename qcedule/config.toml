@@ -1,0 +1,23 @@
+[const]
+discrets = 4
+layers = 3
+max_dev = 1000
+EARLY = "15:40:00"
+REMOVALTIME = 0
+
+#routes_generator.py
+num_trains = 2
+num_stations = 3
+travel_time = 180
+
+#translator.py
+num_blocks = 6
+line_prefix = "c"
+
+
+[files]
+net = "data/network_OEOEB.txt"
+trains = "data/train_OEOEB.txt"
+
+[backend]
+pennylane = "cirq.simulator"

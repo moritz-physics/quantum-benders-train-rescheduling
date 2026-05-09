@@ -1,0 +1,13 @@
+numpy
+networkx
+python-dotenv
+pandas
+gurobipy
+scipy
+SetCoverPy
+z3-solver
+pennylane
+qiskit
+qiskit-aer
+qiskit-ibm-runtime
+

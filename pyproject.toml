@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qcedule"
+version = "1.0"
+description = "A project solving train rescheduling problems using a benders decomposition and quantum computing."
+readme = { file = "README.md"}
+requires-python = ">=3.12"
+authors = [{ name = "Moritz Heidtmann" }, { name = "Andrei Zubarev" }, { name = "Daniel Kratzer" }, { name = "Kilian Krüger" }, { name = "Emanuele Poggi" }]
+
+dynamic = ["dependencies"]
+
+[project.urls]
+"Homepage" = "https://gitlab.lrz.de/mobile-ifi/qcp/25ss/siemens-quantum-benders-decomposition-for-the-train-rescheduling-problem-gate-model"
+
+[tool.setuptools.dynamic]
+dependencies = { file = "requirements.txt" }
