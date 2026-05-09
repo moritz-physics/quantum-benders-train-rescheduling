@@ -24,38 +24,52 @@ Per-person contributions are listed in the [Collaboration](#collaboration) secti
 
 ## Abstract
 
-Restoring a safe, minimal-delay railway timetable after a disruption is a
-combinatorial optimisation problem that scales poorly with the number of
-trains, stations and conflict points. This work presents a **quantum-hybrid
-Benders decomposition** for the Train Rescheduling Problem (TRP) that
-decouples the *continuous* problem of choosing arrival/departure times from
-the *combinatorial* problem of choosing precedence and routing decisions.
-The continuous timing sub-problem is encoded as a Z3 satisfiability instance
-with bucketed deviation predicates, so that a minimal unsatisfiable core
-yields a Benders feasibility cut. The combinatorial master problem becomes a
-Set-Cover Problem (SCP) over those cuts and is solved on superconducting
-quantum hardware with a Quantum Alternating Operator Ansatz (a QAOA variant)
-whose mixer is built from intersection-aware multi-controlled bit-flips,
-preserving the SCP feasible subspace. The framework was benchmarked on
-real-world Siemens instances of six trains over six stations and converges in
-significantly fewer Benders iterations than the classical SCP master
-formulation while producing schedules that respect every safety margin.
-Circuits up to **133 qubits** were executed on IBM Quantum backends.
+> Railway operators must restore safe, minimally delayed timetables within
+> minutes after disruptions, yet traditional monolithic mixed-integer
+> models scale poorly as hundreds of trains interact on dense networks. We
+> address this by proposing a **quantum-hybrid Benders decomposition** that
+> decouples continuous timing from combinatorial precedence decisions. Our
+> framework translates industrial track and schedule data into fixed and
+> selectable lower-bound constraints, then uses a Z3-based satisfiability
+> sub-problem with "bucketed" deviation predicates as assumptions. Minimal
+> unsatisfiable cores serve as Benders cuts in a set-cover master problem,
+> which we solve via a **Quantum Alternating Operator Ansatz (QAOA+)**
+> implemented with intersection-aware, multi-controlled bit-flip mixers. We
+> execute the circuit on IBM's superconducting backends — `ibm_torino`,
+> 133 qubits — and evaluate on Siemens's real-world instances with six
+> trains over six stations. We benchmark against both classical Benders
+> decomposition approaches and a fully centralised classical solver. We
+> show that our method **converges in significantly fewer iterations than
+> classical baselines, while still producing feasible timetables that
+> preserve all safety margins** and operating within currently available
+> quantum resources. The primary limitation remains the extended runtime
+> on quantum hardware. Our findings highlight the need for further research
+> into noise-resilient ansatz design and backend-specific compilation
+> techniques to fully unlock the potential of quantum-hybrid decomposition
+> methods for rail rescheduling in the NISQ era.
+
+> *Heidtmann, Zubarev, Kratzer, Krüger, Poggi — "Quantum Benders
+> Decomposition for Train Rescheduling Problems", LMU Munich, 2025.* See
+> [`Siemens_Train_Rescheduling_Gate_Model_FINAL.pdf`](Siemens_Train_Rescheduling_Gate_Model_FINAL.pdf).
 
 ## Highlights
 
-- 🧪 **Executed on real quantum hardware** — circuits with up to **133
-  qubits** transpiled and run on IBM superconducting backends (Eagle/Heron
-  family) via the Qiskit Runtime `SamplerV2` primitive.
-- 🚆 **Benchmarked on Siemens real-world instances** — six trains routed over
-  six stations on a topology derived from a real corridor (network/train
-  files in `data/`).
-- 📉 **Outperforms classical Benders in iteration count** — the
-  intersection-aware quantum master converges in fewer Benders rounds than
-  the classical greedy / Gurobi set-cover masters on the same instances.
-- ✅ **Feasible, safety-preserving timetables** — every returned schedule
-  respects the head-on / overtaking precedence rules and ambiguity
-  constraints that encode platform safety.
+- 🧪 **Executed on real quantum hardware** — circuits transpiled and run on
+  IBM Quantum's **`ibm_torino`** (Heron, 133-qubit) via the Qiskit Runtime
+  `SamplerV2` primitive. Peak problem+ancilla usage in our experiments
+  reached **~38 qubits** at the hardest difficulty level — comfortably
+  inside the device's 133-qubit budget.
+- 🚆 **Benchmarked on a Siemens-provided industrial dataset** — 19 TRP
+  instances derived from a Norwegian regional network (**40 connector
+  nodes, 47 track segments**), with **6 trains over 6 stations** per
+  instance. Difficulty is parameterised by the *earliest access time*
+  (`15:32:00 → 15:49:00`, 19 levels of increasing congestion).
+- 📉 **Converges in significantly fewer Benders iterations** than the
+  classical greedy / Gurobi set-cover masters, especially on the harder
+  difficulty levels.
+- ✅ **Near-optimal solution quality** — QAOA+ total deviation nearly
+  coincides with the centralised Gurobi reference at low-to-medium
+  difficulty and shows only marginal excess delay at the hardest levels.
 - 🤝 **Industry × academia** — LMU Munich, Siemens AG, and QAR Lab
   contributed problem formulation, data, and quantum-algorithm engineering.
 
@@ -244,47 +258,117 @@ quantum-benders-train/
 
 ## Results
 
-Benchmarks compare three pipelines on the Siemens 6-train / 6-station
-instance, parameterised by an "earliest-time" knob (`15:32:00 … 15:50:00`)
-that increasingly tightens the timetable:
+### Dataset
 
-- **`centralized`** — single Gurobi MILP over the full TRP.
-- **`greedy` / `gurobi`** — Benders decomposition with a *classical* SCP
-  master.
-- **`quantum`** — Benders decomposition with the QAOA-variant SCP master.
-- **`simulator`** — same QAOA master executed on the noiseless Aer
-  simulator, for sanity-checking the hardware runs.
+We benchmark on **19 TRP instances** derived from a Norwegian regional
+network dataset provided by Siemens. Each instance corresponds to a
+disruption scenario — e.g. a temporary network shutdown — characterised by
+an **earliest access time** after which all trains may re-enter the
+network.
 
-All raw `Result` objects are pickled in `results/` (one file per
-constraint-difficulty bucket; see `plots.ipynb` for the loading pattern).
-The aggregate plots are generated by
-`qcedule.experiments.exp_framework.plot_metric` over the metrics
-`time`, `iter_num`, `total_dev`, `rel_dev`, `max_qubits`.
+- **Network topology:** 40 connector nodes, 47 track segments, each
+  annotated with maximum speed and segment length
+  (`data/network_OEOEB.txt`).
+- **Train schedules:** 6 stations and 6 trains per instance, each defined
+  by ordered stop events at specified stations
+  (`data/train_OEOEB.txt`).
+- **Difficulty knob:** earliest access time mapped to a difficulty level
+  0–18. Later access times mean trains have less time to reach their first
+  stops, so more conflicts are generated.
+
+### Solver strategies compared
+
+| Strategy | Role | Engine / parameters |
+| --- | --- | --- |
+| `centralized` | Reference: solves the *whole* TRP at once. | Gurobi 9.1 with continuous timing variables, deviation slacks, binary platform indicators, all precedence + unambiguity constraints. |
+| `greedy`      | Benders master, classical heuristic. | `SetCoverPy` greedy column-selection — fastest but suboptimal. |
+| `gurobi`      | Benders master, classical exact. | Gurobi 9.1 binary LP, `MIPGap=0`, no time limit — provably minimal cover. |
+| `quantum` (QAOA+) | Benders master, quantum-hybrid. | PennyLane circuit (depth `p=2`), 2p `(γ, β)` parameters optimised by **COBYLA** with `maxiter=10` and `shots=10` per evaluation, transpiled at level 1, executed on **AerSimulator** *and* **`ibm_torino`** (`128` shots, up to 5 retries on transient runtime errors). |
+
+The four pipelines share an identical SCP front-end: the same Z3 sub-
+problem produces the same cuts, only the master changes. Raw `Result`
+objects are pickled per constraint-difficulty bucket in `results/`; the
+aggregate plots are produced by
+`qcedule.experiments.exp_framework.plot_metric` and `plot_qubits` over
+the metrics `time`, `iter_num`, `total_dev`, `rel_dev`, `max_qubits`.
+
+### Reported metrics
+
+- **Wall-clock runtime** — end-to-end time including master-loop solves
+  and circuit execution. Hardware-queue delays are subtracted so that
+  reported times reflect compute, not IBM scheduling latency.
+- **Number of Benders iterations** — master-loop cycles until the Z3 sub-
+  problem reports SAT.
+- **Total deviation** — sum of train delays in the rescheduled timetable
+  vs. the published one (seconds).
+- **Maximum qubit usage** — peak (problem + ancilla) qubits in any
+  single iteration.
+
+### Headline findings
+
+**1. Runtime — classical solvers are clearly faster on NISQ hardware.**
+Classical runtimes grow predictably with difficulty (see `plots.ipynb`).
+Greedy is the fastest at every level; Gurobi-master adds moderate cost;
+the centralised Gurobi MILP exhibits the **highest** runtime at medium-to-
+hard difficulty. Quantum runtimes are substantially higher: on the local
+simulator, time grows sharply with circuit depth × shot count × COBYLA
+iterations; on hardware, transpilation, network latency, and job
+execution overhead dominate. **This is the primary current limitation of
+the approach.**
+
+**2. Solution quality — QAOA+ is on par with classical Benders.**
+The centralised Gurobi solver provides the benchmark minimum deviation.
+Both decomposed solvers (classical and quantum) show larger delays at the
+hardest difficulties. **QAOA+ deviations nearly coincide with the
+classical-Benders curves at low and medium difficulty, with only marginal
+excess delay at the highest levels.** Schedules from every method respect
+all precedence and unambiguity constraints — i.e. all returned timetables
+are feasible and preserve safety margins.
+
+**3. Iteration count — QAOA+ converges in significantly fewer Benders
+rounds.** This is the headline algorithmic result. On the hardest
+instances QAOA+ (both simulator and hardware) needs *far fewer* master-
+loop iterations than the greedy or Gurobi master. The mechanism is
+*counter-intuitive*: limited circuit depth (p=2), shot noise, and the
+short COBYLA budget bias the QAOA+ output distribution toward selecting
+**slightly larger relaxation sets** than strictly necessary. With more
+constraints disabled per round, the SMT solver encounters fewer fresh
+incompatibilities, so the decomposition terminates in fewer iterations.
+Gurobi and greedy, in contrast, return tight (often minimal) covers, so
+many constraints stay active, more conflicts surface, and cut generation
+must repeat. As Leutwiler & Corman observed for railway timetabling [3],
+*minimality of the master cover is not strongly correlated with schedule
+quality* — even near-random or heuristic covers can yield similar total
+deviations to an optimal cover.
+
+**4. Qubit usage — well within current NISQ budgets.**
 
 ![Qubit count vs. Benders iteration](qubitsevolution.png)
 
-The figure above shows the qubit count required by the SCP master at each
-Benders iteration, across the difficulty buckets that were actually run on
-hardware. The qubit budget grows monotonically with the iteration index
-(the SCP DataFrame gains a column per new cut), peaking at **133 qubits**
-on the hardest instance — the ceiling of the Eagle generation.
+Per-iteration qubit count is plotted in `qubitsevolution.png` for
+difficulty levels 6, 9, 12, 15. As more conflicts are added, the SCP
+gains rows (element ancillas) and possibly columns (subset qubits),
+yielding a near-linear growth in total qubits over Benders iterations.
+**Peak usage rises to about 38 qubits at difficulty level 15 — well below
+the 133-qubit capacity of `ibm_torino`.** Allocating additional hardware
+runtime would extend the experiments to even higher difficulties.
 
-Headline qualitative findings:
+### Trade-off summary
 
-| Metric | Quantum-hybrid | Classical Benders | Centralised |
-| --- | --- | --- | --- |
-| Iterations to converge | **fewest** on the hardest instances | more iterations than quantum | n/a (single solve) |
-| Total deviation `total_dev` | matches centralised within instance limits | matches centralised | optimal reference |
-| Wall-clock time | dominated by IBM queue + transpile | seconds | seconds |
-| Qubits used | up to **133** | n/a | n/a |
-| Feasibility / safety margins | every returned schedule satisfies all precedence + ambiguity constraints | same | same |
+| Metric | Centralised (Gurobi) | Greedy master | Gurobi master | QAOA+ master |
+| --- | --- | --- | --- | --- |
+| Solution quality (`total_dev`) | **best (reference)** | comparable | comparable | near-optimal, marginal excess at hardest levels |
+| Wall-clock runtime | highest among classical | **fastest** | moderate | substantially higher (NISQ overhead) |
+| Benders iterations | n/a (single solve) | high, grows with difficulty | high, grows with difficulty | **fewest** on hard instances |
+| Peak qubits | n/a | n/a | n/a | up to ~38 (≤ 133-qubit budget) |
+| Feasibility / safety | preserved | preserved | preserved | preserved |
 
-The quantum master tends to "absorb" multiple cuts per iteration through
-its intersection-aware mixer, which is the mechanism behind the iteration-
-count win. Wall-clock time is *not* a competitive metric in the NISQ era
-(queue + transpile dominate), and we do not claim it; the contribution is
-the algorithmic structure and its empirical iteration-count advantage on
-real industrial constraints.
+The headline contribution is therefore not a wall-clock win — it is the
+combination of **iteration efficiency** with **NISQ-feasible qubit
+budgets** and **near-optimal solution quality**: as quantum hardware
+matures and per-circuit overhead drops, the iteration-count advantage of
+QAOA+ should translate into actual runtime gains, while the algorithmic
+structure scales linearly in qubits with problem size.
 
 ## Installation
 
@@ -347,23 +431,36 @@ To reproduce the benchmarks, see
 
 ## Hardware notes & limitations
 
-- **Backends.** Hardware runs use `ibm_torino` (Heron family, 133 qubits)
-  through Qiskit Runtime; the code path also accepts any backend exposed by
-  the user's IBM Quantum account. A `FakeBrisbane` noise model from
+- **Backends.** Hardware runs use **`ibm_torino`** (Heron, 133 qubits)
+  through Qiskit Runtime; the code path also accepts any backend exposed
+  by the user's IBM Quantum account. A `FakeBrisbane` noise model from
   `qiskit-ibm-runtime` is available for noisy-simulator experiments.
-- **NISQ regime.** Two-qubit-gate noise and limited connectivity mean the
-  QAOA master is run with shallow depth (2 layers, 10 shots, 10 COBYLA
-  steps in the default config). Increasing `depth` quickly inflates
-  transpiled circuit size beyond what current backends can execute with
-  useful fidelity.
+- **QAOA+ defaults.** `depth=2`, `shots=10` and `maxiter=10` for the
+  COBYLA parameter optimiser, then `128` shots (with up to 5 retries on
+  `RuntimeJobFailureError`) for the final hardware sample. These are the
+  values used in the paper; they reflect a deliberate trade-off between
+  per-iteration runtime and noise tolerance, not optimised hyper-
+  parameters.
+- **Qubit footprint.** One problem qubit per SCP subset plus one ancilla
+  per conflict element. Peak observed usage was ~38 qubits at the hardest
+  difficulty level — well under the 133-qubit ceiling. Larger instances
+  would benefit from a more ancilla-frugal mixer Hamiltonian, an obvious
+  next step.
 - **Wall-clock.** End-to-end runtime is dominated by IBM queue waits and
   pass-manager transpilation, not gate execution. We subtract queue time
   from `Result.time` (`get_queuetime` in `routing.py`) so reported
-  wall-clock numbers reflect compute, not scheduling latency.
+  wall-clock numbers reflect compute, not scheduling latency. Even after
+  this correction, quantum runtime is **much higher** than the classical
+  baselines on every instance — the principal current limitation of the
+  approach.
+- **NISQ regime.** Physical hardware suffers from decoherence, read-out
+  bias, and CNOT infidelity; for denser networks the required circuit
+  depth may exceed the device's coherence window. AerSimulator runs are
+  noise-free but exponentially slower than hardware on large instances.
 - **Mixer cost.** The intersection-aware mixer uses ancillas plus
   `MultiControlledX` chains, which decompose into many CNOTs. We do *not*
   use `noancilla` MCX synthesis on the QAOA path; the trade-off is more
-  qubits for shorter depth, which is the right call on Eagle/Heron.
+  qubits for shorter depth, which is the right call on Heron.
 
 ## References
 
