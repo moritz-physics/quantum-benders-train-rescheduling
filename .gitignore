@@ -171,3 +171,4 @@ __pycache__/
 .env
 quantum-benders-env/
 *.pyc
+quantum-benders-env/
