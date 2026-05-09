@@ -19,6 +19,17 @@ MAXDEV = CONSTANTS["max_dev"]
 
 
 def get_qcount():
+    """Read and remove the per-iteration qubit-count log written by the QAOA driver.
+
+    The QAOA layer of the master writes the wire count of each Benders
+    iteration to ``QUBITCOUNT`` (``qcount.pkl``) so that the orchestration
+    layer can attach it to the final ``Result``. We pop the file on every
+    call so successive runs do not accumulate stale data.
+
+    Returns:
+        list[int]: One qubit count per Benders iteration, ``[0]`` if the
+        file is missing or empty (i.e. classical-only runs).
+    """
     try:
         with open(QUBITCOUNT, "rb") as f:
             c = pickle.load(f)
@@ -31,6 +42,13 @@ def get_qcount():
 
 
 def get_queuetime():
+    """Read and remove the cumulative IBM Runtime queue-time log.
+
+    ``qasmrun`` writes the time each hardware job spent waiting in the IBM
+    queue to ``TQUEUE`` (``tqueue.pkl``). We subtract this from the wall-
+    clock measurement so that ``Result.time`` reflects compute, not
+    scheduling latency. Returns 0 for simulator-only runs.
+    """
     try:
         with open(TQUEUE, "rb") as f:
             t = pickle.load(f)

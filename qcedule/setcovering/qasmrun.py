@@ -45,7 +45,22 @@ def store_queuetime(time: float) -> None:
 
 
 def run_circ(qasm: str, qcount: int, non_anc_bits: int, simulate=True) -> defaultdict:
-    """Runs the circuit represented as a qasm string. Returns a counts dict ({bitstring: count})."""
+    """Execute an OpenQASM 2 circuit and return non-ancilla measurement counts.
+
+    Pipeline: ``qasm2.loads`` -> Qiskit preset transpiler (level 1) targeting
+    the chosen backend -> ``SamplerV2`` job. Hardware path uses
+    ``ibm_torino`` (Heron, 133 qubits). The returned counts are *grouped by
+    the last ``non_anc_bits``* of each bitstring, i.e. the SCP solution
+    bits without the element ancillas, since IBM exposes results MSB-first.
+
+    Args:
+        qasm: OpenQASM 2 source produced by PennyLane's tape exporter.
+        qcount: Total number of wires (subsets + ancillas).
+        non_anc_bits: Number of subset (non-ancilla) qubits to keep.
+        simulate: If True use the local ``AerSimulator``; if False submit
+            a real-hardware job via Qiskit Runtime. Hardware execution
+            stores the queue time via ``store_queuetime``.
+    """
 
     # Getting the backend
     if simulate:

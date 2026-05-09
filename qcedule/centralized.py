@@ -51,6 +51,14 @@ class CentralSolver:
         # Store time and deviations variables for accessing them later
 
     def _ensure_unambiguity(self, train, stations):
+        """Force exactly one platform per ambiguous station group.
+
+        For each group ``s`` of platforms a train could occupy, we add a
+        binary indicator per platform and force the sum to ``|s| - 1``,
+        which means *exactly one* indicator is False. The False indicator
+        marks the platform that is actually used (``t != 0``); the others
+        are pinned to 0 by indicator constraints.
+        """
         for s in stations:
             cs = self.sv.addVars(s, vtype=gp.GRB.BINARY)
             self.sv.addConstr(gp.quicksum(cs) == len(s) - 1)
@@ -118,6 +126,14 @@ class CentralSolver:
                 self.sv.addConstr(d[idx] == 0)
 
     def solve(self):
+        """Solve the MILP and extract the timetable.
+
+        Returns:
+            tuple[dict, float]: ``(solution, total_deviation)`` where
+            ``solution`` maps ``(train, segment)`` to arrival time in
+            seconds, and ``total_deviation`` is the objective value.
+            Returns ``({}, inf)`` if the model is infeasible.
+        """
         self.sv.optimize()
         if self.sv.Status != gp.GRB.OPTIMAL:
             print("Problem was not feasible!")

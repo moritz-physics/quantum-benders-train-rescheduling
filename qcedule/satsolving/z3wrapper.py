@@ -115,11 +115,18 @@ class SatProblem:
         self._ensure_unambiguity()
 
     def _ensure_unambiguity(self):
+        """Force exactly-one-platform usage per ambiguous OCP group.
+
+        For each group of platforms a train could occupy, we add an n-ary
+        XOR over ``arrival[(t,s)] != 0``. Z3 has no native n-ary XOR, so
+        ``_mXor`` folds binary ``Xor`` to express it.
+        """
         for t, ps in self.amb_risks.items():
             for p in ps:
                 self.solver.add(self._mXor([self.arrival[(t, s)] != 0 for s in p]))
 
     def _mXor(self, args: list):
+        """Right-fold a list of Boolean refs into a chain of binary XORs."""
         if not args:
             return False
         else:
@@ -198,6 +205,12 @@ class SatProblem:
             self.solver.add(RealVal(d_max) - t >= RealVal(-1 * sched))
 
     def core_by_index(self, core: list) -> list:
+        """Convert Z3 unsat-core predicates back to their tuple indices.
+
+        Predicates are named with their stringified ``((train, station),
+        level)`` so ``eval`` round-trips that into a Python tuple, which
+        is what the SCP master expects as a column label.
+        """
         return [eval(str(p)) for p in core]
 
     # Solve

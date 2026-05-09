@@ -143,6 +143,12 @@ def plot_metric(
 
 
 def plot_qubits(results: list[Result], ignore_diff=[]):
+    """Plot per-iteration qubit count for one curve per difficulty level.
+
+    The qubit count grows as the SCP master accumulates new cuts (rows)
+    and possibly new predicates (columns), so the curve is monotone
+    non-decreasing within a single Benders run.
+    """
     diffs = []
     for r in results:
         d = DIFFICULTY[str(datetime.timedelta(seconds=r.earliest))]
@@ -164,6 +170,12 @@ def plot_qubits(results: list[Result], ignore_diff=[]):
 
 
 def get_constraints(times: list[str]):
+    """Build the constraint tuple for each ``EARLY`` time and return them.
+
+    Returns a dict ``earliest_seconds -> (fixed, selectable, deviations)``
+    suitable as input to ``run_benders_experiment`` /
+    ``run_centralized_exp``.
+    """
     net = "data/network_OEOEB.txt"
     trains = "data/train_OEOEB.txt"
     ts = parse_train_file(trains)
@@ -196,6 +208,15 @@ def save_constrs(constrs: dict, filename=CONSTRPKL):
 def run_benders_experiment(
     constrs: dict, strat: str, samples: int, filename: str, **kwargs
 ) -> list[Result]:
+    """Run the Benders algorithm ``samples`` times per constraint instance.
+
+    Each constraint set in ``constrs`` (keyed by earliest-time seconds) is
+    solved ``samples`` times with SCP strategy ``strat`` (``greedy`` /
+    ``gurobi`` / ``quantum``); ``**kwargs`` are passed through to
+    ``benders_algorithm`` (``depth``, ``steps``, ``simulate``, ...).
+    Each ``Result`` is appended to ``filename`` *as it completes* so
+    long-running hardware sweeps do not lose data on crash.
+    """
     rs = []
     for time, constr in constrs.items():
         print(f"Solving constraints for earliest time: {time}")
@@ -211,6 +232,12 @@ def run_benders_experiment(
 
 
 def run_centralized_exp(constrs: dict, samples: int, filename: str) -> list[Result]:
+    """Run the centralised Gurobi MILP baseline ``samples`` times per instance.
+
+    Counterpart to ``run_benders_experiment`` for the non-decomposed
+    reference solver. Results are streamed to ``filename`` as they
+    complete.
+    """
     rs = []
     for time, constr in constrs.items():
         print(f"Solving constraints for earliest time: {time}")

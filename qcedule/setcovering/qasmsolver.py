@@ -28,7 +28,12 @@ STEPS = 10
 
 # choose device: simulator or real hardware
 def get_device(shots: int = SHOTS) -> Device:
-    """Return a PennyLane device"""
+    """Return a PennyLane ``lightning.qubit`` device sized to the wire map.
+
+    PennyLane is only used to *construct* the circuit; execution always
+    happens through the OpenQASM round-trip in ``qasmrun.run_circ``, so we
+    pick the cheapest local device that supports finite-shot sampling.
+    """
     wire_labels = WIRES.values()
     return qml.device("lightning.qubit", wires=wire_labels, shots=shots)
 
@@ -37,18 +42,30 @@ def get_device(shots: int = SHOTS) -> Device:
 
 
 def qOr(qubits: list, target):
-    """Implements logical Or with quantum gates.
-    Optimized version expects X gates before and after are already applied."""
+    """Implement a logical OR of ``qubits`` into ``target`` with quantum gates.
+
+    Caller convention: ``X`` gates are applied before and after the call to
+    flip the basis so that an MCX on the (post-X) ``qubits`` realises an OR
+    rather than an AND on the original qubits (De Morgan). The empty-OR
+    case degenerates to a single X (OR over no inputs is identically False
+    in the original basis, hence True after the surrounding X-flip).
+    """
     if not qubits:
+        # OR over no inputs -> constant False; in the X-flipped basis that
+        # means the target should always be flipped.
         qml.X(target)
     else:
+        # In the X-flipped basis an MCX realises a logical OR.
         qml.MultiControlledX(wires=qubits + [target])
 
 
 def constraint_graph(data: pd.DataFrame):
-    """Builds constraint graph:
-    - subsets are the nodes
-    - edge if two nodes intersect"""
+    """Build the SCP constraint graph (nodes = subsets, edges = intersections).
+
+    Two subsets are connected iff their Boolean column vectors share at
+    least one element (i.e. their dot product is non-zero). This graph
+    drives the intersection-aware mixer in ``mc_bitflip_mixer``.
+    """
     C = nx.Graph()
     C.add_nodes_from(data.columns)
     for (s1, c1), (s2, c2) in combinations(data.items(), 2):
@@ -58,34 +75,53 @@ def constraint_graph(data: pd.DataFrame):
 
 
 def mc_bitflip_mixer(data: pd.DataFrame, beta: float, order):
-    """Implements full Mixer."""
+    """Apply the intersection-aware multi-controlled bit-flip mixer.
+
+    Constraint-preserving Hadfield-style mixer specialised to set cover:
+    for every subset ``c`` we apply ``RX(beta)`` on the qubit of ``c``,
+    multi-controlled by per-element ancillas that hold the predicate
+    *"some neighbour of c containing this element is currently selected"*.
+    Flipping ``c`` therefore only fires when removing ``c`` would still
+    leave every element it contains covered by some neighbour, so amplitude
+    can never leak into infeasible (uncovered) states.
+
+    Args:
+        data: SCP DataFrame (rows = elements, columns = subsets).
+        beta: Mixer angle of the current QAOA layer.
+        order: Iteration order over subset columns -- see ``get_order``.
+    """
+    # Constraint graph: nodes = subsets, edges = "share at least one element".
     N = constraint_graph(data)
-    # For each subset we add RX controlled by an Or-expression:
-    # Preparing states for all upcoming Ors:
+    # Wrap every Or-computation in surrounding X gates so the MCX-based
+    # `qOr` realises a logical OR (De Morgan). These outer X-flips put
+    # everything in the basis the qOr helpers expect.
     for c in data.columns:
         qml.X(WIRES[c])
     for i in data.index:
         qml.X(WIRES[i])
     for c in order:
         contents = data[c]
-        # Get all neighbouring nodes and inhabitants of subset c
+        # Neighbours of c in the constraint graph and the elements that c covers.
         nb = [n for n in N.neighbors(c)]
         inhabitants = [elem for elem, b in contents.items() if b]
-        # For each inhabitant, use an ancilla qubit to encode
-        # if any neighbour containing that inhab is selected
+        # For each element e in c, compute on its ancilla the disjunction
+        # "some neighbour of c that contains e is currently selected".
         for elem in inhabitants:
             cond = [WIRES[n] for n in nb if data.at[elem, n]]
             qOr(cond, WIRES[elem])
-        # Wrap RX in X gates to not let them infer with the or logic.
+        # Locally invert c so the controlled RX flips amplitude *into*
+        # "drop c" only if every inhabitant ancilla evaluates true.
         qml.X(WIRES[c])
-        # Use ancillas to control the bitflip
+        # Multi-controlled RX(beta): the feasibility-preserving mixer step.
         qml.ctrl(qml.RX(phi=beta, wires=WIRES[c]), [WIRES[i] for i in inhabitants])
         qml.X(WIRES[c])
-        # Clean up ancillas
+        # Uncompute the inhabitant ancillas with the mirrored chain so
+        # they are returned to |0> (in the X-flipped basis) before the
+        # next subset is processed.
         for elem in inhabitants:
             cond = [WIRES[n] for n in nb if data.at[elem, n]]
             qOr(cond, WIRES[elem])
-    # Cleaning up/Reverting initial X gates
+    # Revert the surrounding X-flip basis.
     for c in data.columns:
         qml.X(WIRES[c])
     for i in data.index:
@@ -93,7 +129,13 @@ def mc_bitflip_mixer(data: pd.DataFrame, beta: float, order):
 
 
 def cost_layer(gamma, wires):
-    """Applies the cost layer with RZ rotations."""
+    """Apply the QAOA cost unitary ``exp(-i gamma sum_w Z_w / 2)``.
+
+    The diagonal cost Hamiltonian is the sum of ``Z`` on every subset
+    qubit, equivalent (up to constants) to the Hamming weight, i.e. the
+    number of selected subsets. Implementing it as one ``RZ`` per wire is
+    exact since the Pauli-Zs commute.
+    """
     for w in wires:
         qml.RZ(gamma, wires=w)
 
@@ -102,10 +144,23 @@ def cost_layer(gamma, wires):
     decompose, gate_set={qml.RX, qml.RZ, qml.RY, qml.CNOT, qml.Toffoli, qml.PauliX}
 )
 def circuit(data: pd.DataFrame, order, params, depth=LAYERS):
-    """Defines the QAOA quantum circuit."""
+    """The QAOA-variant ansatz used as SCP master.
+
+    Layer structure (Hadfield-style alternating operator ansatz):
+      1. ``X`` on every subset qubit -> the all-1 / "everything selected"
+         state, which is trivially a cover and a natural seed for the
+         constraint-preserving mixer.
+      2. For each of ``depth`` layers, alternate the diagonal cost
+         (``RZ(gamma)`` per subset qubit) and the intersection-aware mixer.
+
+    The ``@decompose`` wrapper restricts the gate set so that the OpenQASM
+    export to Qiskit transpiles cleanly onto IBM hardware native gates.
+    """
     wires = [WIRES[c] for c in data.columns]
+    # Even-indexed params are cost angles, odd-indexed are mixer angles.
     gammas = params[0::2]
     betas = params[1::2]
+    # Initial state |1...1>: all predicates "disabled" -> trivial cover.
     for w in wires:
         qml.X(w)
     for d in range(depth):
@@ -114,9 +169,18 @@ def circuit(data: pd.DataFrame, order, params, depth=LAYERS):
 
 
 def init_wire_map(data: pd.DataFrame):
-    """Initializes a mapping from data column and index to circuit wires."""
+    """Allocate qubit wires for one SCP instance and log the qubit count.
+
+    Layout: subset qubits first (one per column of ``data``), element
+    ancillas after (one per row). The element ancillas are used by the
+    intersection-aware mixer to compute, on the fly, whether dropping a
+    subset would still leave each element covered by some neighbour.
+    """
     global WIRES
     WIRES = {label: data.columns.get_loc(label) for label in data.columns}
+    # Element ancillas are appended *after* all subset qubits so we can
+    # cleanly slice off the SCP solution by looking only at the first
+    # `len(data.columns)` measurement bits.
     WIRES.update({index: index + len(data.columns) for index in data.index})
 
     # Keeping track of qubit count
@@ -131,7 +195,18 @@ def init_wire_map(data: pd.DataFrame):
 
 
 def get_order(data: pd.DataFrame, order):
-    """Chooses an order of the data columns."""
+    """Choose the order in which subset qubits are visited by the mixer.
+
+    The ordering matters because the mixer applies a sequence of
+    multi-controlled flips, and earlier flips change the state observed by
+    later ones.
+
+    Args:
+        data: SCP DataFrame.
+        order: ``None`` -> default column order; truthy -> ascending by
+            subset cardinality (smallest covers first); falsy non-None ->
+            random shuffle.
+    """
     if order is None:
         return data.columns
     elif order:
@@ -143,7 +218,13 @@ def get_order(data: pd.DataFrame, order):
 
 
 def count_cost(counts: dict):
-    """Computes the cost of a counts dictionary."""
+    """SCP-cost estimator from a measurement counts dict.
+
+    The classical cost we minimise is the number of selected subsets, i.e.
+    the Hamming weight of the bitstring. For a counts dict we sum
+    ``hamming_weight(bitstring) * count`` -- a Monte-Carlo estimator (up to
+    a shot-count scale) of the QAOA cost expectation.
+    """
     c = 0
     for string, count in counts.items():
         ones = string.count("1")
@@ -208,7 +289,13 @@ def qaoa(
     shots: int = SHOTS,
     steps: int = STEPS,
 ) -> tuple:
-    """Runs the full QAOA workflow and returns optimized parameters and output distribution."""
+    """Drive one full QAOA iteration: parameter optimisation + final sample.
+
+    Allocates wires for the SCP DataFrame, optimises ``(gamma, beta)``
+    angles via COBYLA on the Hamming-weight cost, and re-runs the optimal
+    circuit once to produce the final measurement counts that
+    ``quantum_solve`` post-processes into a subset selection.
+    """
 
     if data.empty or data.shape[1] == 0:
         raise ValueError("Input DataFrame is empty or has no columns.")
@@ -231,7 +318,14 @@ def qaoa(
 
 
 def quantum_solve(data: pd.DataFrame, **qaoa_kwargs) -> set[Any]:
-    """Solves SCP with QuantumComputing."""
+    """Solve the SCP via the QAOA-variant ansatz and return selected subset labels.
+
+    Drop-in replacement for the classical ``greedy_solve`` / ``gurobi_solve``
+    used by the Benders master. Picks the most frequent measured bitstring
+    as the SCP solution. ``data`` columns are read in left-to-right order;
+    Qiskit / OpenQASM bit strings are right-to-left, so we ``reverse``.
+    ``**qaoa_kwargs`` are forwarded to ``qaoa`` (depth, shots, steps, ...).
+    """
     print("Starting solving with quantum...")
     # init_service()
     counts: dict = qaoa(data, **qaoa_kwargs)

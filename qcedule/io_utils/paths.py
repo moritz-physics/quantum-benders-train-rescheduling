@@ -23,6 +23,7 @@ def ordered(req: list[list[int]], path: list[tuple[int]]) -> bool:
 
 
 def flatten_mapping(mapping: dict[int, dict]):
+    """Flatten a 2-level nested dict into a dict keyed by ``(outer, inner)``."""
     ret = {}
     for x, d in mapping.items():
         for y, val in d.items():
@@ -31,12 +32,22 @@ def flatten_mapping(mapping: dict[int, dict]):
 
 
 def farthest_nodes(G: nx.MultiGraph) -> tuple:
+    """Return the pair of nodes with maximum shortest-path distance in ``G``.
+
+    Used as the canonical entry / exit pair for trains traversing the
+    corridor; trains then enumerate all simple paths between these two.
+    """
     p = dict(nx.all_pairs_shortest_path_length(G))
     q = flatten_mapping(p)
     return max(q.items(), key=operator.itemgetter(1))[0]
 
 
 def cut_path(path: list, edges, tail=False):
+    """Trim a path until it starts (or, with ``tail=True``, ends) on ``edges``.
+
+    Used to clip path enumerations for trains that enter or leave the
+    corridor mid-route (``arrival/departure == -1``).
+    """
     piter = path[::-1] if tail else path.copy()
     for edge in piter:
         if edge[2] in edges:

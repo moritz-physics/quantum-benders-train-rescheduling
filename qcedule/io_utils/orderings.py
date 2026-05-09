@@ -11,6 +11,13 @@ SelectableBounds = dict[int, dict[int, dict[tuple[Idx, Idx], float]]]
 
 @dataclass
 class ConflictInfo:
+    """Detected ordering conflict between two trains on a shared segment.
+
+    Carries the segment id, the two train indices, the segments each train
+    enters next (so we can encode head/tail removal times), and flags
+    indicating whether those segments are part of fixed or selectable
+    routes (``in_sel_*`` / ``out_sel_*``).
+    """
     segment: int
     id_a: int
     id_b: int
@@ -23,6 +30,12 @@ class ConflictInfo:
 
 
 def is_in(ls: list, elem: tuple):
+    """Test whether ``elem`` (an undirected edge tuple) appears in ``ls``.
+
+    Returns ``(found, index)``; checks both edge orientations because the
+    network is modelled as a MultiGraph (undirected). The third tuple
+    component is the parallel-edge key, so we keep it fixed.
+    """
     x, y, k = elem
     if (x, y, k) in ls:
         return True, ls.index((x, y, k))
@@ -33,6 +46,7 @@ def is_in(ls: list, elem: tuple):
 
 
 def get_edge(p, i):
+    """Safe indexing into a path; returns None at the boundary."""
     try:
         return p[i]
     except IndexError:
@@ -40,6 +54,13 @@ def get_edge(p, i):
 
 
 def get_conflicts(A: Train, B: Train):
+    """Find every shared segment between any path of A and any path of B.
+
+    Returns a dict ``edge -> ConflictInfo`` aggregating, for each shared
+    segment, whether it lies on a fixed or selectable portion of either
+    train and what the follow-up segments are. The follow-up segments
+    drive the ordering choice in ``set_fixed_obound``.
+    """
     fixedA = get_fixed_segments(A.paths)
     fixedB = get_fixed_segments(B.paths)
 
@@ -85,6 +106,15 @@ def ordering_bound(
     sel_in=False,
     wait=0,
 ):
+    """Build the per-choice precedence bounds for "A leaves before B enters".
+
+    ``sel_in`` / ``sel_out`` flags indicate whether the conflict segment
+    or A's follow-up are inside a selectable routing choice -- in those
+    cases we synthesise virtual indices and patch the affected choice
+    dictionaries so the bound is conditional on the right route choice.
+    ``wait`` is the head/tail removal time (0 if A continues with another
+    segment immediately).
+    """
     choicedict = {}
 
     # Find all possible indexes for second event (B on conflict seg)

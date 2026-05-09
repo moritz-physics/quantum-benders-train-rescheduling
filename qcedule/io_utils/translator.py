@@ -48,6 +48,14 @@ def set_fbounds(
 
 
 def set_dbounds(train: Train, t_id):
+    """Build the deviation bounds for one train.
+
+    For each scheduled stop, ``max(arrival, departure)`` is the latest time
+    the train should still be at the platform. Each platform that may
+    serve the OCP (the unambiguity disjunction) gets the same bound;
+    exactly one of them will end up with a non-zero arrival time in the
+    feasible Z3 model.
+    """
     dbounds = {}
     for stop in train.stops:
         arr = stop.arrival
@@ -86,6 +94,14 @@ def set_sbounds(
 
 
 def set_fixed_obound(info: ConflictInfo, A: Train, B: Train, selectables: dict):
+    """Build the two ordering choices for a head-on / overtaking conflict.
+
+    Two trains share a segment ``info.segment``. Either A goes first or B
+    does -- ``cdict[0]`` and ``cdict[1]`` encode the per-choice precedence
+    bounds. If the leading train has no follow-up segment we add a
+    removal-time wait (``T_REMOVAL``) so the trailing train cannot enter
+    the segment until the leading train has cleared it.
+    """
     cdict = {}
     # As 1st train enters seg after conflict, 2nd train can arrive -> difference 0:
     min_time0 = 0
@@ -124,8 +140,21 @@ def set_fixed_obound(info: ConflictInfo, A: Train, B: Train, selectables: dict):
 
 
 def build_constraints(G, trains: list[Train], ignore_order=False, early=EARLY):
-    """
-    Gather the constraints together
+    """Build the full ``(fixed, selectable, deviations)`` constraint tuple.
+
+    Three kinds of constraints are produced:
+
+    - ``fixed``: ``((seg, t), (seg', t)) -> min_running_time`` for every
+      pair of consecutive segments common to all paths a train can take.
+    - ``selectable``: ``decision_id -> choice_id -> {edge_pair: bound}``
+      modelling routing-area path choices and head-on / overtaking
+      ordering choices.
+    - ``deviations``: ``(train, platform) -> latest_published_time`` --
+      the soft bounds the Benders sub-problem buckets and tries to
+      enforce.
+
+    ``ignore_order=True`` skips the ordering pass (useful for sanity
+    checks). ``early`` overrides the global earliest-time constant.
     """
     fixed = {}
     selectables = {}
@@ -183,6 +212,7 @@ def total_dev(constr: tuple[dict], model):
 
 
 def constraints_from_file():
+    """Convenience helper: parse the default Siemens files and build constraints."""
     base = os.path.dirname(__file__)
     net_file = os.path.join(base, "../../", IFOLDER, NET)
     train_file = os.path.join(base, "../../", IFOLDER, TRAINS)

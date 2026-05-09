@@ -7,6 +7,14 @@ PICKLEFILE = "results.pkl"
 
 @dataclass
 class Result:
+    """Self-contained record of one solver run.
+
+    Holds the timetable solution, wall-clock time (queue-time subtracted
+    on the quantum path), Benders iteration count, total + relative
+    deviation, per-iteration and peak qubit counts, and metadata
+    identifying the run (``method``, ``solver``, ``earliest``) so a list
+    of these can be plotted directly by ``exp_framework``.
+    """
     model: dict = field(default_factory=dict)
     time: float = 0.0
     iter_num: int = 0
@@ -19,11 +27,13 @@ class Result:
     earliest: int = 0
 
     def save(self, path: str):
+        """Dump this result as a JSON file."""
         with open(path, "w") as f:
             json.dump(asdict(self), f, indent=2)
 
     @staticmethod
     def from_json(path: str) -> "Result":
+        """Load a previously-saved JSON result file."""
         with open(path, "r") as f:
             data = json.load(f)
         return Result(**data)
@@ -50,6 +60,7 @@ def save_results(results: list[Result], filename=PICKLEFILE) -> None:
 
 
 def clean_results(filename=PICKLEFILE):
+    """Truncate a results pickle to an empty list (for re-running a sweep)."""
     with open(filename, "wb") as pfile:
         pickle.dump([], pfile)
 

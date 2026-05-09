@@ -16,5 +16,7 @@ dynamic = ["dependencies"]
 "Homepage" = "https://gitlab.lrz.de/mobile-ifi/qcp/25ss/siemens-quantum-benders-decomposition-for-the-train-rescheduling-problem-gate-model"
 
 [tool.setuptools.dynamic]
-dependencies = { file = "requirements.txt" }[tool.setuptools.packages.find]
+dependencies = { file = "requirements.txt" }
+
+[tool.setuptools.packages.find]
 include = ["qcedule*"]

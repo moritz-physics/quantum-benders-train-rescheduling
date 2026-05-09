@@ -77,8 +77,9 @@ def generate_linear_routes(
     return fixed_prec, selectables, deviations
 
 
-# I guess, JSON doesn't support tuples as dictionary keys? Then we convert them to strings. Not optimal, I suppose, but we can fix it later
+# JSON does not support tuple keys, so recursively cast them to strings.
 def stringify_keys(d):
+    """Recursively convert dict tuple-keys to strings for JSON serialisation."""
     if isinstance(d, dict):
         return {str(k): stringify_keys(v) for k, v in d.items()}
     elif isinstance(d, list):

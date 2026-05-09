@@ -39,8 +39,12 @@ def parse_time(t: str) -> Optional[int]:
 
 
 def parse_network_file(path):
-    """
-    Reading network_OEOEB.txt, getting data, building a graph
+    """Parse a Siemens network file into a NetworkX MultiGraph.
+
+    The file format declares edges with ``c <seg_id> <p_from> <p_to>
+    <v_max_kmh> <length_m>`` lines (``p`` lines describe coordinates and
+    are read separately). Travel time per segment is derived from
+    ``length / v_max`` and stored on the edge as ``time`` (seconds).
     """
     G = MultiGraph()
     with open(path, encoding="utf-8") as f:
@@ -63,8 +67,13 @@ def parse_network_file(path):
 
 
 def parse_train_file(path):
-    """
-    Reading train_OEOEB.txt, getting data, exctracting list of trains and their stops
+    """Parse a Siemens train file into a list of ``Train`` objects.
+
+    Each train block lists the operational control points (OCPs) the train
+    must visit with arrival and departure times. The OCP names are mapped
+    to network platform IDs via ``OCP2P``. ``N/A`` arrivals/departures are
+    encoded as ``-1`` so downstream code can decide whether the train
+    enters/leaves the corridor at that stop.
     """
     trains = []
     current = None
