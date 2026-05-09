@@ -129,12 +129,18 @@ def mc_bitflip_mixer(data: pd.DataFrame, beta: float, order):
 
 
 def cost_layer(gamma, wires):
-    """Apply the QAOA cost unitary ``exp(-i gamma sum_w Z_w / 2)``.
+    """Apply the QAOA+ cost unitary for ``H_C = sum_w Z_w``.
 
     The diagonal cost Hamiltonian is the sum of ``Z`` on every subset
     qubit, equivalent (up to constants) to the Hamming weight, i.e. the
-    number of selected subsets. Implementing it as one ``RZ`` per wire is
-    exact since the Pauli-Zs commute.
+    number of selected subsets. The paper writes the cost evolution as
+    ``RZ(2*gamma)`` per wire (following the ``exp(-i gamma Z)`` =
+    ``RZ(2*gamma)`` convention of PennyLane's ``qml.RZ``); this
+    implementation passes ``gamma`` directly so the ``gamma`` learnt by
+    COBYLA is rescaled by 1/2 vs. the paper's notation -- a relabelling
+    of the parameter range, not a functional difference.
+    Implementing it independently per wire is exact since the Pauli-Zs
+    pairwise commute.
     """
     for w in wires:
         qml.RZ(gamma, wires=w)

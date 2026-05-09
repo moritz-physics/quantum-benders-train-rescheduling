@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Qiskit](https://img.shields.io/badge/Qiskit-IBM%20Runtime-6929C4?logo=ibm&logoColor=white)](https://www.ibm.com/quantum/qiskit)
-[![IBM Quantum](https://img.shields.io/badge/IBM%20Quantum-Heron%20%2F%20Eagle-052FAD?logo=ibm&logoColor=white)](https://quantum.ibm.com/)
+[![IBM Quantum](https://img.shields.io/badge/IBM%20Quantum-Heron%20(ibm__torino)-052FAD?logo=ibm&logoColor=white)](https://quantum.ibm.com/)
 [![Z3](https://img.shields.io/badge/Z3-SMT%20solver-2A579A)](https://github.com/Z3Prover/z3)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
 
@@ -127,17 +127,64 @@ The control loop is implemented in
 
 **Continuous timing sub-problem** —
 [`qcedule/satsolving/z3wrapper.py`](qcedule/satsolving/z3wrapper.py).
+
 For each train×station event the wrapper introduces a real-valued arrival
-variable `t_(i,s)`. Fixed precedences `t_j − t_i ≥ τ` and selectable choices
-`Or(And(...), …)` are encoded directly. Deviations from the published
-timetable are encoded as **bucketed predicates**: at discretisation level
-`level∈{0,…,k-1}` the predicate `p_(i,s,level)` implies that the deviation of
-event `(i,s)` is below `level · d_max / k`. Z3 is asked to satisfy the
-*active* predicates as **assumptions**, so an UNSAT response yields a
-minimal unsat-core whose elements are exactly the deviation predicates that
-must be relaxed — the natural ground set for the SCP master cut. An
-auxiliary `Xor` constraint enforces *unambiguity*: for each train, exactly
-one of the platforms in an ambiguous station group is actually used (`t≠0`).
+variable $t_{i,s} \in \mathbb{R}_{\ge 0}$ and a deviation slack $\delta_{i,s}
+= t_{i,s} - f_{i,s}$ relative to the published time $f_{i,s}$. The origin
+event is pinned at $t_{\text{origin}} = 0$. Constraints are encoded as
+
+- **Fixed precedences** (running times along a single train):
+  $t_{i,s'} - t_{i,s} \ge f_{(i,s),(i,s')} \quad \forall ((i,s),(i,s')) \in F.$
+- **Selectable precedences** (route choices and head-on / overtaking
+  conflicts) — for every decision $d \in D$ with choice set $C_d$:
+  $\bigvee_{c \in C_d} \bigwedge_{((i,s),(j,s)) \in c}
+  t_{j,s} - t_{i,s} \ge f_{(i,s),(j,s)}.$
+- **Unambiguity** at stations with multiple candidate platforms — a
+  multi-input `Xor` constraint forces exactly one $t_{i,s}$ in the group
+  to be non-zero.
+- **Deviation buckets** — the published deviation budget $\delta_{\max}$
+  is split into a uniform grid of $K$ levels. For each level
+  $k \in \{0,\dots,K-1\}$ a Boolean predicate $p_{i,s,k}$ guards
+  the upper bound
+  $$p_{i,s,k} \implies \big(t_{i,s} - f_{i,s}\big) \le k\,\delta_{\max}/K,$$
+  and the always-active clause $t_{i,s} \le f_{i,s} + \delta_{\max}$ caps
+  the loosest bucket ($k=K$). The grid is **uniform**; adapting it to
+  actual headway distributions or train priorities is one of the
+  identified directions for future work.
+
+Z3 is invoked through `solver.check(A)` with a dynamic **assumption list**
+$A(B)$ that contains every bucket predicate **not** disabled by the
+master. On the initial call $A$ contains only the tightest bucket
+$p_{i,s,0}$ per event; later calls include all buckets that have not been
+relaxed yet. If Z3 returns **UNSAT**, `solver.unsat_core()` is a subset of
+$A$ and therefore references only deviation predicates — these become the
+SCP elements for the master cut. The full procedure (Algorithm 1 of the
+paper):
+
+```
+Algorithm 1 — Z3 sub-problem
+INPUT:  disable-set B ⊆ {p_{i,s,k}}
+OUTPUT: (sat?, model, unsat-core)
+
+A ← ∅
+for each event (i, s):
+    for k = K-1 downto 0:
+        if p_{i,s,k} ∈ B:  break
+        A ← A ∪ { p_{i,s,k} }
+res ← solver.check(A)
+if res = SAT:    return (true, model, ∅)
+if res = UNSAT:  C ← A ∩ solver.unsat_core()
+                 if C = ∅: raise EmptyCoreException
+                 return (false, ∅, C)
+raise RuntimeError "unknown — consider a timeout"
+```
+
+Each precedence edge contributes one linear constraint and at most one
+literal; total encoding cost is
+$|F| + \sum_{d\in D} \max_{c\in C_d}|c| + (K+1)|I_\delta| + |X|$ constraints
+and $K|I_\delta|$ Boolean variables, where $X$ counts the XOR ambiguity
+constraints. Z3 handles the Boolean–linear mixture with an incremental
+CDCL(T) solver.
 
 **Master Set-Cover Problem** —
 [`qcedule/setcovering/scpwrapper.py`](qcedule/setcovering/scpwrapper.py).
@@ -161,55 +208,74 @@ against.
 
 ### Quantum circuit
 
-The quantum master is a **Quantum Alternating Operator Ansatz** — a QAOA
-variant in the sense of Hadfield et al. — with a problem-tailored mixer that
-preserves SCP feasibility. The circuit is constructed in PennyLane, exported
-to OpenQASM 2, and executed through Qiskit Runtime on hardware
+The quantum master is a **Quantum Alternating Operator Ansatz (QAOA+)** —
+a QAOA variant in the sense of Hadfield et al. — with a problem-tailored
+mixer that preserves SCP feasibility. The circuit is constructed in
+PennyLane, exported to OpenQASM 2, and executed through Qiskit Runtime on
+hardware
 (`qcedule/setcovering/qasmsolver.py`,
 [`qcedule/setcovering/qasmrun.py`](qcedule/setcovering/qasmrun.py)).
 
-**Wire layout.** `init_wire_map` allocates one *subset* qubit per SCP column
-and one *element* (ancilla) qubit per SCP row. The all-ones initial state is
-prepared by `X` gates on every subset wire — this corresponds to "all
-predicates disabled" and is *trivially* a cover of the empty constraint set,
-making it a natural feasible warm-start for the mixer to walk from.
+A QAOA+ layer alternates the cost and mixer unitaries
 
-**Cost layer.** A diagonal `RZ(γ)` per subset wire penalises selecting more
-columns, biasing the optimiser toward minimum covers (`cost_layer`).
+$$\Big(e^{-i\beta_p H_M} e^{-i\gamma_p H_C}\Big) \cdots
+\Big(e^{-i\beta_1 H_M} e^{-i\gamma_1 H_C}\Big),$$
+
+starting from a *trivially feasible* initial state — the all-ones
+bitstring, "everything selected" — which is itself a cover. Because the
+mixer only allows transitions inside the feasible subspace, every
+intermediate state is also a valid cover, so we can drop coverage
+penalty terms from $H_C$.
+
+**Cost Hamiltonian.** $H_C = \sum_i Z_i$ — the diagonal cost penalises
+active qubits ($Z|1\rangle = -|1\rangle$), biasing samples toward
+fewer-subset covers. The paper writes the cost evolution per wire as
+`RZ(2γ)` (matching `exp(-iγZ)` under PennyLane's `RZ(φ) = exp(-iφ/2·Z)`
+convention); the implementation in `qasmsolver.cost_layer` passes `γ`
+directly, which is equivalent up to a 2× rescaling of the angle range
+COBYLA learns over.
 
 **Intersection-aware multi-controlled bit-flip mixer**
-(`mc_bitflip_mixer`, contributed by D. Kratzer). For each subset `c` the
-mixer applies `RX(β)` on the qubit of `c`, *but only if* dropping `c` would
-still leave every element of `c` covered by some neighbour in the
-**constraint graph** — the graph in which subsets are nodes and edges
-connect subsets whose Boolean column vectors share at least one element
-(`constraint_graph`). The control logic is:
+($H_M(\alpha)$, contributed by D. Kratzer; closely follows §A.2.5 of
+Hadfield et al.). $H_M$ decomposes into one *partial mixer* $H_{M,S_j}$
+per subset $S_j$. To preserve feasibility, $S_j$ is allowed to flip
+**only when every element it contains is already covered by some other
+selected subset**. For each element $i \in S_j$ we compute on an ancilla
+the disjunction
+$\bigvee_{l:\, i\in S_l \land l\ne j} x_l$
+(implemented with a single multi-controlled X surrounded by basis-flipping
+X gates — De Morgan), apply a multi-controlled `RX(α)` on the qubit of
+$S_j$ with all element ancillas as controls, and uncompute the ancillas
+with the mirrored chain. Partial mixers are applied sequentially in the
+order subsets were added to the SCP during Benders iterations.
 
-1. For every element `e ∈ c`, compute on an ancilla the disjunction "some
-   neighbour of `c` containing `e` is currently selected" using a chain of
-   `MultiControlledX` (`qOr`).
-2. Apply `RX(β)` to the qubit of `c`, controlled by **all** element
-   ancillas — i.e. flip `c` only if every element it contains is already
-   covered by another selected subset.
-3. Uncompute the ancillas with a mirrored chain.
+The figure below (Fig. 3 of the paper) shows the resulting circuit for
+the toy SCP instance $\{A=\{1,2,3\},\ B=\{1,2\}\}$:
 
-The result is a non-trivial, *feasibility-preserving* mixer in the spirit of
-Hadfield's QAOA+: amplitude only leaves states that are valid SCP covers,
-which is critical on noisy hardware where the cost-Hamiltonian alone cannot
-suppress infeasible bitstrings. A static rendering of the transpiled circuit
-on an Eagle backend is checked in as
-[`circ.png`](circ.png) (raw OpenQASM in [`circ`](circ)).
+![Mixer circuit for the toy SCP {A={1,2,3}, B={1,2}}](docs/mixer_example.png)
 
-**Parameter optimisation.** `optimize_parameters` runs SciPy COBYLA on
-`count_cost`, the average Hamming weight of the measured bitstrings — a
-direct estimator of the SCP cost. The number of layers, shots, and
-optimisation steps are exposed as keyword arguments to `benders_algorithm`.
+A static rendering of an *actual* transpiled circuit on `ibm_torino`
+is checked in as [`circ.png`](circ.png) (raw OpenQASM in
+[`circ`](circ)).
+
+**Parameter optimisation.** SciPy `COBYLA` minimises the Hamming-weight
+estimator `count_cost` directly on the bitstring counts (a Monte-Carlo
+proxy of the QAOA cost expectation). Default budget per Benders
+iteration: `depth=2`, `shots=10`, `maxiter=10`.
 
 **Decomposition for hardware.** Before transpilation we decompose to
-`{RX, RY, RZ, CNOT, Toffoli, X}` via `pennylane.transforms.decompose`, which
-keeps the gate count low enough for the IBM coupling map. Qiskit's preset
-pass manager (level 1) then maps onto a real backend (`ibm_torino` is
-hard-coded in `qasmrun.run_circ`; swap as needed).
+`{RX, RY, RZ, CNOT, Toffoli, X}` via `pennylane.transforms.decompose`,
+which keeps the gate count low enough for the IBM coupling map. Qiskit's
+preset pass manager (level 1) then maps onto a real backend
+(`ibm_torino` is hard-coded in `qasmrun.run_circ`; swap as needed).
+
+**Scalability.** One *problem qubit* per SCP subset and one *element
+ancilla* per conflict, so qubit count grows near-linearly in the SCP
+size. Each Benders iteration adds at least one element (one ancilla),
+and possibly new subsets too. Mixer depth depends on the number of
+subsets in the SCP and, for each partial mixer, linearly on $D_j$ — the
+number of subsets that intersect with $S_j$ in the constraint graph
+(see §IV.B.7 of the paper).
 
 ## Repository structure
 
@@ -252,6 +318,8 @@ quantum-benders-train/
 ├── plots.ipynb / plotting.ipynb     # figure generation
 ├── circ / circ.png                  # transpiled hardware circuit (qasm + image)
 ├── qubitsevolution.png              # qubit count vs. Benders iteration
+├── docs/mixer_example.png           # paper Fig. 3 (toy SCP mixer)
+├── Siemens_Train_Rescheduling_Gate_Model_FINAL.pdf  # the paper
 ├── pyproject.toml / requirements.txt
 └── README.md
 ```
@@ -464,19 +532,51 @@ To reproduce the benchmarks, see
 
 ## References
 
-The framework synthesises ideas from:
+Bibliography of the paper (`Siemens_Train_Rescheduling_Gate_Model_FINAL.pdf`):
 
-- J. F. Benders. *Partitioning procedures for solving mixed-variables
-  programming problems* (1962). The decomposition principle.
-- E. Farhi, J. Goldstone, S. Gutmann. *A Quantum Approximate Optimization
-  Algorithm* (2014). The base QAOA algorithm.
-- S. Hadfield et al. *From the Quantum Approximate Optimization Algorithm
-  to a Quantum Alternating Operator Ansatz* (2019). The constraint-
-  preserving mixer family that this work specialises to set cover.
-- L. de Moura, N. Bjørner. *Z3: An efficient SMT solver* (2008). The
-  underlying engine for the timing sub-problem and unsat-core extraction.
-- IBM Quantum & Qiskit (Qiskit Runtime, `SamplerV2`, transpiler) — the
-  hardware execution stack.
+1. Deutsche Bahn AG. *Integrated Report 2024.* https://ibir.deutschebahn.com/2024/, 2024.
+2. V. Cacchiani, D. Huisman, M. Kidd, L. Kroon, P. Toth, L. Veelenturf, J. Wagenaar.
+   *An overview of recovery models and algorithms for real-time railway
+   rescheduling.* Transportation Research Part B, 63:15–37, 2014.
+3. F. Leutwiler, F. Corman. *Set covering heuristics in a Benders
+   decomposition for railway timetabling.* Computers & Operations Research,
+   159:106339, 2023.
+4. E. Farhi, J. Goldstone, S. Gutmann. *A Quantum Approximate Optimization
+   Algorithm.* arXiv:1411.4028, 2014.
+5. F. Leutwiler, F. Corman. *A logic-based Benders decomposition for
+   microscopic railway timetable planning.* European Journal of
+   Operational Research, 303(2):525–540, 2022.
+6. S. Hadfield, Z. Wang, B. O'Gorman, E. G. Rieffel, D. Venturelli, R. Biswas.
+   *From the Quantum Approximate Optimization Algorithm to a Quantum
+   Alternating Operator Ansatz.* Algorithms, 12(2):34, 2019.
+7. J. E. Beasley. *Algorithms for unconstrained two-dimensional guillotine
+   cutting.* Journal of the Operational Research Society, 36(4):297–306,
+   1985.
+8. E. Balas, A. Ho. *Set covering algorithms using cutting planes,
+   heuristics, and subgradient optimization.* Combinatorial Optimization,
+   pp. 37–60, 1980.
+9. V. Chvátal. *A greedy heuristic for the set-covering problem.*
+   Mathematics of Operations Research, 4(3):233–235, 1979.
+10. J. F. Benders. *Partitioning procedures for solving mixed-variables
+    programming problems.* Computational Management Science, 2(1), 2005.
+11. C. Grange, M. Poss, E. Bourreau. *An introduction to variational
+    quantum algorithms for combinatorial optimization problems.* 4OR,
+    21(3):363–403, 2023.
+12. C. Grange. *Design and application of quantum algorithms for railway
+    optimisation problems.* PhD thesis, Université de Montpellier, 2024.
+13. K. Domino, E. Doucet, R. Robertson, B. Gardas, S. Deffner. *On the
+    Baltimore Light RailLink into the quantum future.* arXiv:2406.xxxxx,
+    2024.
+14. L. de Moura, N. Bjørner. *Z3: An Efficient SMT Solver.* TACAS, LNCS
+    4963:337–340, Springer, 2008.
+15. P. Virtanen et al. *SciPy 1.0: Fundamental Algorithms for Scientific
+    Computing in Python.* Nature Methods, 17:261–272, 2020.
+16. M. A. Nielsen, I. L. Chuang. *Quantum Computation and Quantum
+    Information.* Cambridge University Press, 2010.
+17. Gurobi Optimization, LLC. *Gurobi Optimizer Reference Manual,*
+    9.1 ed., 2020.
+18. G. Zhu. *SetCoverPy: A heuristic solver for the set cover problem.*
+    Astrophysics Source Code Library, ascl–2203, 2022.
 
 ## Collaboration
 
